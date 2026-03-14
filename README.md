@@ -1,42 +1,23 @@
 # Claude Usage API
 
-API em FastAPI para executar `claude /usage` com profiles separados.
+API em FastAPI para executar comandos do Claude CLI com profiles separados.
 
 ## Endpoints
 
 ### `GET /health`
 Verifica se o binário `claude` está disponível.
 
+### `GET /debug/claude-version`
+Retorna a versão do CLI.
+
+### `GET /debug/claude-help`
+Retorna a ajuda do CLI para descobrir os comandos disponíveis.
+
 ### `POST /usage`
-Executa `claude /usage` com o token e profile informados.
+Tenta executar o comando de usage com token e profile informados.
 
-#### Header opcional
-`x-api-key: SUA_CHAVE_DA_API`
+## Header opcional
+Se `API_KEY` estiver configurada no ambiente, envie:
 
-#### Body
-```json
-{
-  "token": "SEU_SETUP_TOKEN",
-  "profile": "conta_1"
-}
-```
-
-## Subir localmente
-```bash
-docker compose up -d --build
-```
-
-## Teste
-```bash
-curl http://localhost:8000/health
-```
-
-```bash
-curl -X POST http://localhost:8000/usage \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: troque-essa-chave" \
-  -d '{
-    "token": "SEU_SETUP_TOKEN",
-    "profile": "conta_1"
-  }'
-```
+```http
+x-api-key: SUA_CHAVE_DA_API
