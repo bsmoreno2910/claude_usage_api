@@ -7,7 +7,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      API_KEY: "troque-essa-chave"
+      API_KEY: "sk-cla-sXlLgEViMavoa1repC8oef0HP2SSy84K7eg2MuDQ4A2sslhY2igbh4bN6M7ZozC1"
       PROFILES_BASE: "/data/profiles"
       CLAUDE_BIN: "claude"
       REQUEST_TIMEOUT: "120"
