@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="Claude Usage API", version="1.0.0")
+app = FastAPI(title="Claude Usage API", version="1.1.0")
 
 PROFILES_BASE = Path(os.getenv("PROFILES_BASE", "/data/profiles"))
 CLAUDE_BIN = os.getenv("CLAUDE_BIN", "claude")
@@ -27,15 +27,24 @@ def sanitize_profile(profile: str) -> str:
     return profile or "default"
 
 
-def run_command(cmd: list[str], env: dict) -> dict:
+def validate_api_key(x_api_key: Optional[str]) -> None:
+    expected_api_key = os.getenv("API_KEY", "").strip()
+
+    if expected_api_key and (not x_api_key or x_api_key != expected_api_key):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def run_command(cmd: list[str], env: Optional[dict] = None, timeout: Optional[int] = None) -> dict:
     result = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
         env=env,
-        timeout=REQUEST_TIMEOUT
+        timeout=timeout or REQUEST_TIMEOUT
     )
+
     return {
+        "command": cmd,
         "exit_code": result.returncode,
         "stdout": (result.stdout or "").strip(),
         "stderr": (result.stderr or "").strip(),
@@ -43,7 +52,7 @@ def run_command(cmd: list[str], env: dict) -> dict:
     }
 
 
-def run_claude_usage(token: str, profile: str) -> dict:
+def build_profile_env(token: str, profile: str) -> tuple[str, Path, dict]:
     profile = sanitize_profile(profile)
     profile_path = PROFILES_BASE / profile
     profile_path.mkdir(parents=True, exist_ok=True)
@@ -64,7 +73,25 @@ def run_claude_usage(token: str, profile: str) -> dict:
     env["XDG_CACHE_HOME"] = str(xdg_cache_home)
     env["XDG_DATA_HOME"] = str(xdg_data_home)
 
+    return profile, profile_path, env
+
+
+def run_claude_usage(token: str, profile: str) -> dict:
+    profile, profile_path, env = build_profile_env(token, profile)
+
     usage_result = run_command([CLAUDE_BIN, "/usage"], env)
+
+    stdout = usage_result["stdout"]
+    stderr = usage_result["stderr"]
+
+    known_invalid_patterns = [
+        "Unknown skill: usage",
+        "unknown skill: usage",
+    ]
+
+    if any(p in stdout or p in stderr for p in known_invalid_patterns):
+        usage_result["success"] = False
+        usage_result["exit_code"] = 1
 
     return {
         "profile": profile,
@@ -82,6 +109,7 @@ def health():
             text=True,
             timeout=30
         )
+
         return {
             "ok": result.returncode == 0,
             "claude_bin": CLAUDE_BIN,
@@ -95,17 +123,58 @@ def health():
         }
 
 
-@app.post("/usage")
-def usage(payload: UsageRequest, x_api_key: Optional[str] = Header(default=None)):
-    expected_api_key = os.getenv("API_KEY", "").strip()
-    if expected_api_key and (not x_api_key or x_api_key != expected_api_key):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+@app.get("/debug/claude-version")
+def debug_claude_version(x_api_key: Optional[str] = Header(default=None)):
+    validate_api_key(x_api_key)
 
     try:
-        return run_claude_usage(payload.token, payload.profile)
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=408, detail="Timeout running claude /usage")
+        return run_command([CLAUDE_BIN, "--version"], timeout=30)
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail="Claude CLI not found in container")
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail=str(ex))
+
+
+@app.get("/debug/claude-help")
+def debug_claude_help(x_api_key: Optional[str] = Header(default=None)):
+    validate_api_key(x_api_key)
+
+    try:
+        return run_command([CLAUDE_BIN, "--help"], timeout=30)
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="Claude CLI not found in container")
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail=str(ex))
+
+
+@app.post("/usage")
+def usage(payload: UsageRequest, x_api_key: Optional[str] = Header(default=None)):
+    validate_api_key(x_api_key)
+
+    try:
+        result = run_claude_usage(payload.token, payload.profile)
+
+        if not result["success"]:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "message": "claude usage command failed",
+                    "profile": result["profile"],
+                    "profile_path": result["profile_path"],
+                    "command": result["command"],
+                    "exit_code": result["exit_code"],
+                    "stdout": result["stdout"],
+                    "stderr": result["stderr"]
+                }
+            )
+
+        return result
+
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=408, detail="Timeout running claude command")
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="Claude CLI not found in container")
+    except HTTPException:
+        raise
     except Exception as ex:
         raise HTTPException(status_code=500, detail=str(ex))
